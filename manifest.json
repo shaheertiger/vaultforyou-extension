@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Private Bookmarks by VaultForYou",
   "short_name": "Private Bookmarks",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Save pages into a password-protected, encrypted vault that stays on this computer. No account, no sync, no tracking.",
   "homepage_url": "https://www.vaultforyou.app/?utm_source=chrome_extension&utm_medium=extension&utm_campaign=private_bookmarks&utm_content=homepage_url",
   "minimum_chrome_version": "116",
@@ -27,14 +27,26 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": ["storage", "activeTab", "sidePanel", "idle"],
+  "permissions": [
+    "storage",
+    "activeTab",
+    "sidePanel",
+    "idle",
+    "contextMenus"
+  ],
   "commands": {
     "_execute_action": {
-      "suggested_key": { "default": "Alt+Shift+B" },
+      "suggested_key": {
+        "default": "Alt+Shift+B"
+      },
       "description": "Save this page / open Private Bookmarks"
     }
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'none'"
-  }
+  },
+  "optional_permissions": [
+    "bookmarks"
+  ],
+  "incognito": "spanning"
 }
