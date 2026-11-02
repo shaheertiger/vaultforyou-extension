@@ -1,0 +1,2 @@
+Geist (c) Vercel, and Instrument Serif (c) The Instrument Serif Project Authors.
+Both are licensed under the SIL Open Font License, Version 1.1: https://openfontlicense.org
