@@ -1,0 +1,9 @@
+body { width: 360px; background: #fff; }
+body.is-dark { background: var(--night); }
+.pop { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 14px; background: #fff; }
+.page-card { display: flex; gap: 12px; padding: 12px; border-radius: 12px; background: var(--bg-2); align-items: center; }
+.page-title { font: 600 13.5px/1.3 var(--sans); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+.saved-badge { flex: none; width: 44px; height: 44px; border-radius: 50%; background: var(--green-soft); color: #17745A; display: flex; align-items: center; justify-content: center; }
+.status-note { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; background: var(--blue-soft); color: #1B2547; font-size: 13.5px; line-height: 1.45; }
+.status-note svg { color: var(--blue); flex: none; margin-top: 1px; }
+.toast { bottom: 12px; }
