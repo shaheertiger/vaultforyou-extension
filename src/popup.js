@@ -135,7 +135,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') window.close
 
 // Another page (side panel, auto-lock) changed the vault or lock state.
 vault.onChange((changes, area) => {
-  if (area === 'session' || (changes.vault && !changes.vault.newValue)) refresh();
+  if ((area === 'session' && 'vaultKey' in changes) || vault.vaultRemoved(changes)) refresh();
 });
 
 (async () => {
@@ -143,5 +143,12 @@ vault.onChange((changes, area) => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     S.tab = tab || null;
   } catch (e) { S.tab = null; }
+  // A right-click save made while the vault was locked hands its page or link to us.
+  const { pendingSave } = await chrome.storage.session.get('pendingSave');
+  if (pendingSave && Date.now() - pendingSave.t < 120000) {
+    S.tab = { ...(S.tab || {}), url: pendingSave.url, title: pendingSave.title };
+    S.pending = true;
+  }
+  if (pendingSave) chrome.storage.session.remove('pendingSave');
   await refresh();
 })();

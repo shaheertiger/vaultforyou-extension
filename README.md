@@ -9,6 +9,11 @@ A Chrome extension (Manifest V3) that saves pages into a password-protected, enc
 - **Folders**: create, rename, delete (keep or delete the bookmarks inside).
 - **Settings**: auto-lock (1, 5, 15, 60 minutes or when Chrome closes), change password, delete vault.
 - **Backup and restore**: encrypted `.pvb` export, import with merge (existing bookmarks kept, duplicates skipped).
+- **Right-click** any page or link › "Save … to Private Bookmarks". It saves straight away when unlocked; when locked, it asks for the password first.
+- **Open in incognito**: a setting, plus an item in each bookmark's ⋯ menu, so visits stay out of Chrome's history. Needs "Allow in Incognito".
+- **Import from Chrome bookmarks**: pick a folder, encrypt it into the vault, optionally remove it from Chrome. Bookmark access is an optional permission: it's requested only for the import and released straight afterwards.
+- **Decoy password**: a second password opens a separate, ordinary-looking vault. Both slots always exist in storage (the unused one is random filler) and unlocking always tries both, so nothing shows that a decoy exists. Deleting the vault while the decoy is open only empties the decoy.
+- **Backup reminder** in the library: shown once there are 5+ bookmarks and no backup, the last backup is older than 30 days, or 25+ bookmarks have been added since it.
 - **Onboarding tab** opens on install: create the vault inline, how-to steps, and the VaultForYou app pitch.
 
 ## Security model
@@ -58,5 +63,7 @@ Needs Chrome 116+. "Save current page" from the side panel opens the popup throu
 | `storage` | Keep the encrypted vault and settings on this computer. |
 | `sidePanel` | Show the library in Chrome's side panel. |
 | `idle` | Auto-lock when the computer is inactive or the screen locks. |
+| `contextMenus` | The right-click “Save to Private Bookmarks” items. |
+| `bookmarks` (optional) | Asked for only when you import from Chrome bookmarks, then released. |
 
 Fonts: Geist and Instrument Serif (SIL Open Font License), bundled in `fonts/`.

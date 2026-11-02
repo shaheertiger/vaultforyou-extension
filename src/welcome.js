@@ -33,5 +33,5 @@ async function render() {
   focusFirst(view);
 }
 
-vault.onChange((changes, area) => { if (area === 'session' || changes.vault) render(); });
+vault.onChange((changes, area) => { if (area === 'session' || vault.vaultRemoved(changes)) render(); });
 render();

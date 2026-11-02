@@ -3,6 +3,7 @@ import * as vault from './vault.js';
 import { welcomeView, setupView, unlockView, focusFirst } from './auth-views.js';
 import { folderSelect } from './folder-select.js';
 import { siteUrl } from './config.js';
+import { openUrl, canUseIncognito, openExtensionSettings } from './open.js';
 
 const app = document.getElementById('app');
 const S = {
@@ -20,6 +21,8 @@ async function refresh() {
   S.settings = await vault.getSettings();
   S.data = S.status === 'unlocked' ? await vault.load() : null;
   if (S.status === 'unlocked' && !S.data) S.status = 'locked';
+  S.decoy = S.status === 'unlocked' && (await vault.isDecoy());
+  S.incogOk = await canUseIncognito();
   if (S.status !== 'unlocked') { S.menu = null; S.dlg = null; S.q = ''; S.view = 'library'; }
   else S.auth = null;
   if (S.data && S.filter !== 'all' && S.filter !== 'fav' && S.filter !== 'none' && !S.data.folders.some(f => f.id === S.filter)) S.filter = 'all';
@@ -50,7 +53,7 @@ function render(focus = false) {
   let view;
   document.body.classList.toggle('is-dark', S.status === 'locked' || !!S.auth);
   if (S.status !== 'unlocked') view = lockedOrNone();
-  else view = ({ library: libraryView, edit: editView, folders: foldersView, settings: settingsView, backup: backupView }[S.view] || libraryView)();
+  else view = ({ library: libraryView, edit: editView, folders: foldersView, settings: settingsView, backup: backupView, importChrome: importChromeView }[S.view] || libraryView)();
   const root = h('div', { class: 'panel' }, view, S.menu && h('div', { class: 'backdrop', onClick: closeMenu }), S.dlg && dialogView());
   app.replaceChildren(root);
   if (S.dlg) focusFirst(root.querySelector('.dialog'));
@@ -126,9 +129,24 @@ function libraryView() {
         unf ? chip('none', 'No folder', unf) : null,
         h('button', { class: 'chip chip-add', onClick: () => go('folders') }, icon('plus', 13), 'Manage folders')),
       h('button', { class: 'btn btn-primary', onClick: saveCurrent }, icon('plus', 16), 'Save current page')),
+    backupReminder(),
     h('div', { class: 'list-head' }, listTitle, listCount),
     listHost,
     h('div', { class: 'foot' }, icon('monitor', 13), `Encrypted · stored on this computer only · ${plural(d.bms.length, 'bookmark', 'bookmarks')}`));
+}
+
+// Nudge people to export a backup: there is no password reset.
+function backupReminder() {
+  const m = S.data.meta || {}, n = S.data.bms.length, now = Date.now(), DAY = 864e5;
+  if (n < 5 || (m.snoozeUntil && m.snoozeUntil > now)) return null;
+  const stale = !m.lastBackup || (now - m.lastBackup > 30 * DAY && n !== m.backupCount) || n - (m.backupCount || 0) >= 25;
+  if (!stale) return null;
+  return h('div', { class: 'reminder', role: 'status' },
+    h('div', { class: 'grow' }, h('b', null, m.lastBackup ? 'Time for a new backup' : 'Back up your vault'), h('br'),
+      m.lastBackup ? `Your last backup was ${fmtDate(m.lastBackup)}. There is no password reset, so keep a recent copy.` : `You have ${plural(n, 'bookmark', 'bookmarks')} and no backup yet. There is no password reset, so a backup is your safety net.`),
+    h('div', { class: 'row', style: 'gap:6px' },
+      h('button', { class: 'btn btn-primary btn-xs', onClick: () => go('backup', { exp: 'idle', imp: null }) }, 'Back up now'),
+      h('button', { class: 'btn btn-xs', style: 'background:transparent;color:var(--ink-2)', onClick: async () => { await save(d => { d.meta.snoozeUntil = Date.now() + 14 * DAY; }); render(); } }, 'Later')));
 }
 
 function emptyStates(list) {
@@ -143,12 +161,14 @@ function emptyStates(list) {
 
 function rowView(b) {
   const dom = domainOf(b.url);
-  const open = () => { closeMenu(); chrome.tabs.create({ url: b.url }); };
+  const open = () => openBookmark(b.url, S.settings.openIncognito);
+  const openOther = () => openBookmark(b.url, !S.settings.openIncognito);
   const menuItem = (label, fn, cls = '') => h('button', { role: 'menuitem', class: 'menu-item ' + cls, onClick: fn }, label);
   let menu = null;
   if (S.menu === b.id && !S.menuMove) {
     menu = h('div', { role: 'menu', 'aria-label': 'Bookmark actions', class: 'menu' },
-      menuItem('Open in new tab', open),
+      menuItem(S.settings.openIncognito ? 'Open in incognito window' : 'Open in new tab', open),
+      menuItem(S.settings.openIncognito ? 'Open in regular tab' : 'Open in incognito window', openOther),
       menuItem('Edit', () => go('edit', { editId: b.id })),
       h('button', { role: 'menuitem', class: 'menu-item spread', onClick: () => { S.menuMove = true; render(); focusFirst(document.querySelector('.menu')); } }, 'Move to folder', h('span', { 'aria-hidden': 'true' }, '›')),
       menuItem(b.fav ? 'Remove from favorites' : 'Add to favorites', () => toggleFav(b)),
@@ -167,13 +187,20 @@ function rowView(b) {
       }));
   }
   return h('div', { role: 'listitem', class: 'bm' + (S.menu === b.id ? ' raised' : '') },
-    h('button', { 'data-row': '1', id: 'row-' + b.id, class: 'bm-open', 'aria-label': `${b.title}, ${dom}. Open in new tab`, title: b.url, onClick: open },
+    h('button', { 'data-row': '1', id: 'row-' + b.id, class: 'bm-open', 'aria-label': `${b.title}, ${dom}. ${S.settings.openIncognito ? 'Open in incognito window' : 'Open in new tab'}`, title: b.url, onClick: open },
       tile(b.url, 32),
       h('span', { class: 'col', style: 'min-width:0;gap:2px' }, h('span', { class: 'bm-title ellipsis' }, b.title), h('span', { class: 'bm-sub ellipsis' }, `${dom} · ${fname(b.folder)}`))),
     h('button', { class: 'icon-btn star' + (b.fav ? ' on' : ''), id: 'fav-' + b.id, 'aria-pressed': String(!!b.fav), 'aria-label': (b.fav ? 'Remove ' : 'Add ') + b.title + (b.fav ? ' from favorites' : ' to favorites'), onClick: () => toggleFav(b) }, icon('star', 17)),
     h('button', { class: 'icon-btn', id: 'more-' + b.id, 'aria-haspopup': 'menu', 'aria-expanded': String(S.menu === b.id), 'aria-label': 'More actions for ' + b.title,
       onClick: () => { S.menu = S.menu === b.id ? null : b.id; S.menuMove = false; render(); if (S.menu) focusFirst(document.querySelector('.menu')); } }, icon('more')),
     menu);
+}
+
+async function openBookmark(url, incognito) {
+  S.menu = null; S.menuMove = false;
+  const r = await openUrl(url, { incognito });
+  if (r === 'needs-access') { S.dlg = { type: 'incog', url }; }
+  render();
 }
 
 async function toggleFav(b) {
@@ -328,6 +355,11 @@ function settingsView() {
         h('div', { class: 'row', style: 'justify-content:space-between;gap:10px' },
           h('div', null, h('div', { class: 'card-title' }, 'Password'), h('div', { class: 'card-sub' }, 'Change the password that opens your vault.')), pwBtn),
         pwBody),
+      privacyCard(),
+      S.decoy ? null : decoyCard(),
+      h('button', { class: 'card card-link', onClick: () => go('importChrome', { imp2: null }) },
+        h('span', null, h('span', { class: 'card-title', style: 'display:block' }, 'Import from Chrome bookmarks'), h('span', { class: 'card-sub', style: 'display:block' }, 'Move a bookmarks folder into the vault, then remove it from Chrome if you like.')),
+        h('span', { 'aria-hidden': 'true', style: 'font-size:18px;color:var(--muted)' }, '›')),
       h('button', { class: 'card card-link', onClick: () => go('backup', { exp: 'idle', imp: null }) },
         h('span', null, h('span', { class: 'card-title', style: 'display:block' }, 'Backup and restore'), h('span', { class: 'card-sub', style: 'display:block' }, 'Export an encrypted file or import one.')),
         h('span', { 'aria-hidden': 'true', style: 'font-size:18px;color:var(--muted)' }, '›')),
@@ -337,6 +369,174 @@ function settingsView() {
         h('div', { class: 'card-sub' }, 'Permanently erases every bookmark and folder from this browser. This can’t be undone unless you have a backup.'),
         h('button', { class: 'btn btn-danger-outline btn-sm', style: 'margin-top:10px;height:36px', onClick: () => { S.dlg = { type: 'vault' }; render(); } }, 'Delete vault…')),
       h('div', { class: 'small muted', style: 'text-align:center' }, `Private Bookmarks ${chrome.runtime.getManifest().version} · `, h('a', { href: siteUrl('settings_footer'), target: '_blank', rel: 'noopener' }, 'vaultforyou.app'))));
+}
+
+function privacyCard() {
+  const box = h('input', { type: 'checkbox', checked: S.settings.openIncognito, onChange: async () => {
+    const on = box.checked;
+    if (on && !(await canUseIncognito())) { box.checked = false; S.dlg = { type: 'incog' }; render(); return; }
+    await vault.setSettings({ openIncognito: on });
+    S.settings.openIncognito = on;
+    toast(on ? 'Bookmarks will open in an incognito window' : 'Bookmarks will open in a regular tab');
+  } });
+  return h('div', { class: 'card' },
+    h('div', { class: 'eyebrow', style: 'margin-bottom:8px' }, 'Privacy'),
+    h('label', { class: 'check', style: 'font-size:14px' }, box,
+      h('span', null, h('b', null, 'Open bookmarks in an incognito window'), h('br'),
+        h('span', { class: 'muted', style: 'font-size:13px' }, 'Visits stay out of Chrome’s history. You can still pick the other option from a bookmark’s ⋯ menu.'))),
+    !S.incogOk && h('div', { class: 'small muted', style: 'margin-top:8px' }, 'Needs “Allow in Incognito” turned on for this extension. ',
+      h('a', { href: '#', onClick: e => { e.preventDefault(); openExtensionSettings(); } }, 'Open extension settings')));
+}
+
+// A second password that opens a separate, ordinary-looking vault.
+function decoyCard() {
+  const has = !!S.data.meta?.hasDecoy;
+  const body = h('div', { hidden: true });
+  const btn = h('button', { class: 'btn btn-secondary btn-sm', 'aria-expanded': 'false' }, has ? 'Change…' : 'Set up…');
+  btn.addEventListener('click', () => {
+    body.hidden = !body.hidden;
+    btn.textContent = body.hidden ? (has ? 'Change…' : 'Set up…') : 'Cancel';
+    btn.setAttribute('aria-expanded', String(!body.hidden));
+    body.replaceChildren(body.hidden ? '' : decoyForm(has));
+    if (!body.hidden) document.getElementById('dc-n1')?.focus();
+  });
+  return h('div', { class: 'card' },
+    h('div', { class: 'row', style: 'justify-content:space-between;gap:10px;align-items:flex-start' },
+      h('div', null, h('div', { class: 'card-title' }, 'Decoy password', has ? h('span', { class: 'pill' }, 'On') : null),
+        h('div', { class: 'card-sub' }, 'A second password that opens a separate, ordinary-looking vault. Use it if someone makes you unlock. Nothing shows that a decoy exists.')), btn),
+    body);
+}
+
+function decoyForm(has) {
+  const n1 = h('input', { id: 'dc-n1', type: 'password', class: 'input', autocomplete: 'new-password' });
+  const n2 = h('input', { id: 'dc-n2', type: 'password', class: 'input', autocomplete: 'new-password' });
+  [n1, n2].forEach(i => i.addEventListener('input', () => setError(i, '')));
+  const submit = h('button', { type: 'submit', class: 'btn btn-primary' }, has ? 'Replace decoy password' : 'Turn on decoy');
+  const f = (id, label, input) => h('div', { class: 'field' }, h('label', { for: id, class: 'label' }, label), input);
+  const form = h('form', { class: 'col gap-12', style: 'margin-top:14px', novalidate: true },
+    f('dc-n1', 'Decoy password', n1), f('dc-n2', 'Confirm decoy password', n2),
+    h('div', { class: 'info', style: 'font-size:12.5px' }, 'The decoy vault starts empty. Lock, unlock with the decoy password and save a few everyday pages so it looks lived-in.',
+      has ? h('span', null, ' ', h('b', null, 'Replacing the password empties the current decoy.')) : null),
+    submit,
+    has ? h('button', { type: 'button', class: 'btn btn-danger-outline btn-sm', onClick: async () => { await vault.removeDecoy(); toast('Decoy password turned off'); await refresh(); } }, 'Turn off decoy') : null);
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (submit.disabled) return;
+    if (n1.value.length < 8) { setError(n1, 'Use at least 8 characters.'); return n1.focus(); }
+    if (n2.value !== n1.value) { setError(n2, 'Passwords don’t match.'); return n2.focus(); }
+    setBusy(submit, true, 'Saving…');
+    const r = await vault.setDecoy(n1.value);
+    if (r === 'same') { setBusy(submit, false, has ? 'Replace decoy password' : 'Turn on decoy'); setError(n1, 'Use a different password from your real one.'); return n1.focus(); }
+    toast('Decoy password is on');
+    await refresh();
+  });
+  return form;
+}
+
+// ----- Import from Chrome bookmarks -----
+
+function importChromeView() {
+  const st = S.imp2 || (S.imp2 = { step: 'start' });
+  const back = () => go('settings', { imp2: null });
+  let body;
+  if (st.step === 'start') {
+    body = [
+      h('div', { class: 'card' },
+        h('div', { class: 'card-title' }, 'How it works'),
+        h('ol', { style: 'margin:8px 0 0;padding-left:20px;font-size:13px;line-height:1.6;color:var(--ink-2)' },
+          h('li', null, 'Chrome asks you to let this extension read your bookmarks.'),
+          h('li', null, 'Pick a folder. Its bookmarks, including subfolders, are encrypted into your vault.'),
+          h('li', null, 'Optionally remove them from Chrome’s bookmarks.'),
+          h('li', null, 'Access to your Chrome bookmarks is released straight away.')),
+        h('button', { class: 'btn btn-primary', style: 'margin-top:12px', autofocus: true, onClick: async () => {
+          let ok = false;
+          try { ok = await chrome.permissions.request({ permissions: ['bookmarks'] }); } catch (e) { ok = false; }
+          if (!ok) { toast('Chrome bookmarks access wasn’t allowed'); return; }
+          const tree = await chrome.bookmarks.getTree();
+          S.imp2 = { step: 'pick', folders: flattenFolders(tree), pick: null, remove: false };
+          render(true);
+        } }, 'Choose a folder…'))
+    ];
+  } else if (st.step === 'pick') {
+    const nameIn = h('input', { id: 'ic-name', class: 'input', maxlength: 60, value: st.pick ? st.folders.find(f => f.id === st.pick)?.title || '' : '' });
+    const remove = h('input', { type: 'checkbox', checked: st.remove, onChange: () => { st.remove = remove.checked; } });
+    const btn = h('button', { class: 'btn btn-primary btn-block', disabled: !st.pick }, 'Import into vault');
+    btn.addEventListener('click', async () => {
+      const f = st.folders.find(x => x.id === st.pick);
+      if (!f) return;
+      setBusy(btn, true, 'Encrypting…');
+      try {
+        const items = f.urls.filter(u => isWebUrl(u.url)).map(u => ({ title: u.title, url: u.url, folderName: nameIn.value.trim(), added: u.dateAdded }));
+        const r = await vault.addMany(items);
+        let removed = 0;
+        if (st.remove) removed = await removeFromChrome(f.id, new Set(items.map(i => i.url)));
+        await chrome.permissions.remove({ permissions: ['bookmarks'] }).catch(() => {});
+        S.imp2 = { step: 'done', r, removed, skippedNonWeb: f.urls.length - items.length };
+        S.data = await vault.load();
+        render(true);
+      } catch (e) {
+        setBusy(btn, false, 'Import into vault');
+        toast('Couldn’t import. Unlock the vault and try again.');
+      }
+    });
+    body = [
+      h('div', { class: 'card col', style: 'gap:2px;padding:8px' },
+        h('div', { class: 'eyebrow', style: 'padding:6px 8px' }, 'Chrome bookmark folders'),
+        st.folders.length ? st.folders.map(f => h('label', { class: 'radio ic-row', style: `padding-left:${8 + f.depth * 16}px` },
+          h('input', { type: 'radio', name: 'ic', checked: st.pick === f.id, disabled: !f.count, onChange: () => { st.pick = f.id; render(); document.getElementById('ic-name')?.focus(); } }),
+          h('span', { class: 'grow ellipsis' }, f.title), h('span', { class: 'muted small' }, f.count)))
+          : h('p', { class: 'muted', style: 'margin:8px' }, 'No bookmark folders found.')),
+      st.pick && h('div', { class: 'card col gap-12' },
+        h('div', { class: 'field' }, h('label', { for: 'ic-name', class: 'label' }, 'Vault folder'), nameIn,
+          h('div', { class: 'small muted', style: 'margin-top:6px' }, 'Leave empty to put them in “No folder”. A folder with the same name is reused.')),
+        h('label', { class: 'check' }, remove, h('span', null, 'Remove these bookmarks from Chrome after importing')),
+        btn)
+    ];
+  } else {
+    const { r, removed, skippedNonWeb } = st;
+    body = [h('div', { class: 'ok', role: 'status' }, h('b', null, 'Import finished. '),
+      `${plural(r.added, 'bookmark was', 'bookmarks were')} added to your vault.`,
+      r.skipped ? ` ${plural(r.skipped, 'was', 'were')} already there.` : '',
+      skippedNonWeb ? ` ${plural(skippedNonWeb, 'item wasn’t a web page', 'items weren’t web pages')} and stayed in Chrome.` : '',
+      removed ? ` ${plural(removed, 'bookmark was', 'bookmarks were')} removed from Chrome.` : '',
+      ' Access to your Chrome bookmarks has been released.'),
+      h('button', { class: 'btn btn-primary', autofocus: true, onClick: () => go('library', { imp2: null, filter: 'all' }) }, 'View library')];
+  }
+  return h('div', { class: 'col grow', style: 'min-height:0' },
+    subHeader('Import from Chrome', back, 'Back to settings'),
+    h('div', { class: 'scroll col gap-14' }, body));
+}
+
+function flattenFolders(tree) {
+  const out = [];
+  const urlsIn = n => (n.children || []).flatMap(c => c.url ? [c] : urlsIn(c));
+  const walk = (n, depth) => {
+    for (const c of n.children || []) {
+      if (c.url) continue;
+      out.push({ id: c.id, title: c.title || 'Untitled folder', depth, count: urlsIn(c).length, urls: urlsIn(c) });
+      walk(c, depth + 1);
+    }
+  };
+  for (const root of tree) walk(root, 0);
+  return out;
+}
+
+/** Removes the imported bookmarks (and folders left empty) from Chrome. Root folders stay. */
+async function removeFromChrome(folderId, urls) {
+  let removed = 0;
+  const [node] = await chrome.bookmarks.getSubTree(folderId);
+  const prune = async n => {
+    for (const c of n.children || []) {
+      if (c.url) { if (urls.has(c.url)) { await chrome.bookmarks.remove(c.id); removed++; } }
+      else await prune(c);
+    }
+    const [after] = await chrome.bookmarks.getSubTree(n.id);
+    if (n.id !== folderId && n.parentId && n.parentId !== '0' && !(after.children || []).length) await chrome.bookmarks.remove(n.id);
+  };
+  await prune(node);
+  const [top] = await chrome.bookmarks.getSubTree(folderId);
+  if (top.parentId && top.parentId !== '0' && !(top.children || []).length) await chrome.bookmarks.remove(folderId);
+  return removed;
 }
 
 // Funnel: the VaultForYou iPhone app.
@@ -367,9 +567,10 @@ function passwordForm(done) {
     if (n2.value !== n1.value) { setError(n2, 'Passwords don’t match.'); bad = bad || n2; }
     if (bad) return bad.focus();
     setBusy(submit, true, 'Updating…');
-    const ok = await vault.changePassword(cur.value, n1.value);
+    const r = await vault.changePassword(cur.value, n1.value);
     setBusy(submit, false, 'Update password');
-    if (!ok) { setError(cur, 'That isn’t your current password.'); return cur.focus(); }
+    if (r === 'wrong') { setError(cur, 'That isn’t your current password.'); return cur.focus(); }
+    if (r === 'taken') { setError(n1, 'Choose a different password.'); return n1.focus(); }
     toast('Password changed');
     done();
   });
@@ -511,6 +712,17 @@ function dialogView() {
           }, del ? 'Folder and bookmarks deleted' : n ? 'Folder deleted. Bookmarks kept in No folder' : 'Folder deleted');
           render();
         } }, del0(dl, n))));
+  } else if (dl.type === 'incog') {
+    box = h('div', { class: 'dialog', role: 'alertdialog', 'aria-modal': 'true', 'aria-labelledby': 'dlg-i' },
+      h('h2', { id: 'dlg-i', class: 'h-md' }, 'Allow incognito first'),
+      h('p', null, 'To open bookmarks in an incognito window, Chrome needs “Allow in Incognito” turned on for Private Bookmarks.'),
+      h('ol', { style: 'margin:10px 0 0;padding-left:20px;font-size:13.5px;line-height:1.6;color:var(--ink-2)' },
+        h('li', null, 'Select “Open extension settings” below.'),
+        h('li', null, 'Turn on “Allow in Incognito”.'),
+        h('li', null, 'Come back and try again.')),
+      h('div', { class: 'dlg-actions' },
+        dl.url ? h('button', { class: 'btn btn-secondary', onClick: () => { const u = dl.url; S.dlg = null; openUrl(u); render(); } }, 'Open normally') : h('button', { class: 'btn btn-secondary', onClick: close }, 'Cancel'),
+        h('button', { class: 'btn btn-primary', autofocus: true, onClick: () => { S.dlg = null; openExtensionSettings(); render(); } }, 'Open extension settings')));
   } else if (dl.type === 'vault') {
     const input = h('input', { id: 'dv-t', class: 'input', autocomplete: 'off', autofocus: true, spellcheck: 'false' });
     const btn = h('button', { type: 'submit', class: 'btn btn-danger', disabled: true }, 'Delete vault');
@@ -524,8 +736,8 @@ function dialogView() {
       e.preventDefault();
       if (input.value !== 'DELETE' || btn.disabled) return;
       setBusy(btn, true, 'Deleting…');
-      await vault.erase();
-      S.dlg = null;
+      await vault.deleteVault();
+      Object.assign(S, { dlg: null, view: 'library', filter: 'all' });
       toast('Vault deleted');
       refresh();
     });
@@ -540,7 +752,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (S.dlg) { S.dlg = null; render(); return; }
     if (S.menu) { closeMenu(); return; }
-    if (S.status === 'unlocked' && S.view !== 'library') { go(S.view === 'backup' ? 'settings' : 'library'); return; }
+    if (S.status === 'unlocked' && S.view !== 'library') { go(['backup', 'importChrome'].includes(S.view) ? 'settings' : 'library'); return; }
   }
   if (e.key === '/' && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName || '') && S.status === 'unlocked' && S.view === 'library' && !S.dlg) {
     const el = document.getElementById('bm-search');
